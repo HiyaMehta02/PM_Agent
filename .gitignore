@@ -1,0 +1,11 @@
+# Python virtual environment
+venv/
+.venv/
+env/
+
+# Environment variables (Crucial for your API Keys!)
+.env
+
+# Python cache (keeps your repo from looking messy)
+__pycache__/
+*.pyc
