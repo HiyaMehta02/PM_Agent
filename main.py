@@ -101,15 +101,37 @@ def commit_code_to_github(repo_name, file_path, content, task_name):
         print(f"❌ Error committing to GitHub: {e}")
         return None
     
-def log_to_csv(card_name, prompt_version, status, pr_url):
+def log_to_csv(card_name, prompt_version, status, eval_score, pr_url):
     file_exists = os.path.isfile('logs.csv')
+    
     with open('logs.csv', mode='a', newline='', encoding='utf-8') as file:
-        # fieldnames = ['timestamp', 'card_name', 'prompt_version', 'status', 'pr_url']
         writer = csv.writer(file)
         if not file_exists:
-            writer.writerow(['Timestamp', 'Card Name', 'Prompt Version', 'Status', 'PR URL'])
+            writer.writerow(['Timestamp', 'Card Name', 'Prompt Version', 'Status', 'Eval Score', 'PR URL'])
+            
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        writer.writerow([timestamp, card_name, prompt_version, status, pr_url])
+        writer.writerow([timestamp, card_name, prompt_version, status, eval_score, pr_url])
+
+def score_with_ai_judge(generated_code, good_code_path):
+    print("🤖 AI Judge is scoring the generated code...")
+    try:
+        with open(good_code_path, 'r', encoding='utf-8') as file:
+            good_code = file.read()
+        prompt = f"""Act as a strict Senior Software Engineer. I am going to give you a 'Golden' reference code, and a piece of 'AI Generated' code. Compare the AI's functionality, logic, and structure against the Golden code. Ignore slight variable name differences; focus on whether it accomplishes the exact same goals.
+        Golden Code: {good_code}
+        Generated Code: {generated_code}
+        Give the AI code a 'similarity_score' from 0 to 100. Return ONLY JSON: {{"score": 85, "critique": "Missed the database connection logic."}}"""
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config={'response_mime_type': 'application/json'}
+        )
+        result = json.loads(response.text)
+        print(f"⚖️ AI Judge Score: {result['score']}/100 - {result['critique']}")
+        return result['score']
+    except Exception as e:
+        print(f"❌ AI Judge Error: {e}")
+        return 0
 
 def get_attachment_url(card_id, attachment_id):
     url = f"https://api.trello.com/1/cards/{card_id}/attachments/{attachment_id}"
@@ -175,7 +197,11 @@ if response.status_code == 200:
                 
                 if ui_image:
                     print("📸 Image ready. Asking Gemini to write code (This may take a few seconds)...")
-                    prompt = f"Act as a Senior Developer. Generate code for: {card['name']}. Requirements: {card['desc']} {all_checklists}"
+                    prompt = f"""Act as a Senior Developer. Generate code for: {card['name']}. 
+                    CRITICAL ARCHITECTURE RULES:
+                    2. Do NOT use mock data. You must implement actual API fetching logic.
+                    3. Ensure dynamic routing is used (e.g., useLocalSearchParams) instead of hardcoding values.
+                    Requirements: {card['desc']} {all_checklists}"""
                     
                     generate_code = client.models.generate_content(
                         model='gemini-2.5-flash',
@@ -188,10 +214,12 @@ if response.status_code == 200:
                     pr_url = commit_code_to_github("HiyaMehta02/MCCAcademyApp", file_name, generate_code, card['name'])
                     
                     if pr_url:
+                        eval_score = score_with_ai_judge(generate_code, 'good_code.tsx')
+                        log_to_csv(card['name'], "V2_Strict_Rules", "Success", eval_score, pr_url)
+                        
                         post_trello_comment(card['id'], f"🚀 Build complete! PR created: {pr_url}")
                         target_list = '68bdf9f73eba23ffac9b4961'
                         moved = requests.put(f"https://api.trello.com/1/cards/{card['id']}", params={'key': key, 'token': token, 'idList': target_list})
-                        log_to_csv(card['name'], "V1_Strict_Template", "Success", pr_url)
                         print(f"🎉 Pipeline finished successfully for {card['name']}!")
 else:
     print(f"❌ Failed to connect to Trello: {response.text}")
